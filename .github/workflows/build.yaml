@@ -1,0 +1,42 @@
+name: autobuild
+
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - "**/*.h*"
+      - "**/*.cpp"
+      - "**/CMakeLists.txt"
+  pull_request:
+    branches: [master, develop]
+    paths:
+      - "**/*.h*"
+      - "**/*.cpp"
+      - "**/CMakeLists.txt"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install MPI
+        run: |
+          sudo apt update
+          sudo apt install -y mpich
+
+      - name: "CMake Build"
+        uses: lukka/run-cmake@v3
+        with:
+          useVcpkgToolchainFile: false
+          buildDirectory: "${{ github.workspace }}/build"
+          cmakeListsTxtPath: "${{ github.workspace }}/CMakeLists.txt"
+          cmakeAppendedArgs: "-GNinja -DCMAKE_BUILD_TYPE=Release --parallel $(nproc)"
+      
+      - name: "Run tests"
+        env:
+          CTEST_PARALLEL_LEVEL: 2
+        working-directory: ${{ github.workspace }}/build
+        run: ctest
