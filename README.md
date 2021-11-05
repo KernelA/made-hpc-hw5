@@ -1,23 +1,53 @@
-# made-hpc-hw5
+# HW 5 MPI
 
-## Description
+## Требования для запуска
+
+1. CMake 3.20 или выше.
+2. Компилятор с поддержкой C++17.
+3. Установленный MPI.
+4. ОС на основе UNIX.
+5. Python 3.7 с [matplotlib](https://matplotlib.org/stable/index.html). Только для визуализации.
+
+## Задания
+
+### Знакомство в компании
+
+[Исходный код программы](mpi/src/contact.cpp)
+
+### Параллельный одномерный клеточный автомат
+
+[Исходный код программы](mpi/src/cellular_automat.cpp)
+
+Периодические, непериодические граничные условия и номер правила задаются через аргументы командной строки.
+
+[График ускорения работы программы от числа процессов](images/perf.md)
+
+[Картинка эволюции для правил](images/evolution.md)
 
 
-## Requirements
+## Как запустить
 
-1. CMake 3.20 or higher.
-2. Compiler with support C++17.
-
-## How to run
-
-Create new directory `build`.
-
+Создать директорию: `build`.
 ```
 mkdir build
-cmake -S . -B .\build
+cmake -S . -B ./build
 ```
 
-Run CMake:
+Выполнить CMake:
+```bash
+cmake --build ./build --config Release --parallel $(nproc) --target all
 ```
-cmake --build .\build --config Release -j 4 --target <input_target>
+
+Запуск знакомство в компании:
 ```
+mpiexec -n 3 ./build/mpi/contact
+```
+
+Запуск расчётов для клеточного автомата:
+```
+mpiexec -n 6 ./build/mpi/cellular_automat 100 90 100 b
+```
+
+100- число ячеек, 90-номер правила, 100- число шагов эволюции, b-периодические граничные условия.
+
+

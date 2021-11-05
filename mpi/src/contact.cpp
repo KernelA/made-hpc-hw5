@@ -1,3 +1,4 @@
+#include "mpi.h"
 #include "perm.hpp"
 #include "stdafx.h"
 
