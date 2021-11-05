@@ -8,18 +8,18 @@ const int NUM_GOST_CELLS{2};
 
 void update_state(const std::vector<bool>& rule, std::vector<bool>& prev_stat,
                   std::vector<bool>& state) {
-  for (size_t i{}; i < state.size(); i++) {
-    prev_stat[i] = state[i];
-  }
-
   std::vector<bool>::const_iterator current_value{prev_stat.cbegin() + 1};
 
   for (size_t i{1}; i < state.size() - 1; ++i) {
-    size_t rule_index{
+    short int rule_index{
         utils::bitmask2byte(current_value - 1, current_value + 2)};
+
     state.at(i) = rule.at(rule_index);
     ++current_value;
   }
+
+  state.at(0) = state.at(1);
+  state.at(state.size() - 1) = state.at(state.size() - 2);
 }
 
 void broadcast_rule(std::vector<bool>& rule, int root_rank, int rank) {
@@ -27,7 +27,7 @@ void broadcast_rule(std::vector<bool>& rule, int root_rank, int rank) {
 
   MPI_Bcast(&size, 1, MPI_INT, root_rank, MPI_COMM_WORLD);
 
-  bool temp_rules[rule.size()];
+  bool temp_rules[size];
 
   for (size_t i{}; i < rule.size(); ++i) {
     temp_rules[i] = rule[i];
@@ -95,21 +95,36 @@ void rec_cell_state(std::vector<bool>& cell_state, int rank, int source_rank) {
   }
 }
 
-void sync_states(std::vector<bool>& cell_stat, MPI_Comm comm) {
+void sync_states(std::vector<bool>& cell_stat, MPI_Comm comm, int world_rank) {
   int local_world_size = {};
   MPI_Comm_size(comm, &local_world_size);
   int local_rank{};
   MPI_Comm_rank(comm, &local_rank);
 
-  bool gost_cell = cell_stat.at(cell_stat.size() - 1);
+#ifdef DEBUG
+  std::cout << "Global rank: " << world_rank << " local rank " << local_rank
+            << " local word size " << local_world_size << std::endl;
+#endif
 
   // Send right border
   if (local_rank + 1 < local_world_size && local_rank == 0) {
-    MPI_Send(&gost_cell, 1, MPI_CXX_BOOL, local_rank + 1, local_rank + 1, comm);
+    bool right_bound = cell_stat.at(cell_stat.size() - 1);
+    bool left_bound_from_remote;
+
+    MPI_Send(&right_bound, 1, MPI_CXX_BOOL, local_rank + 1, local_rank + 1,
+             comm);
+    MPI_Recv(&left_bound_from_remote, 1, MPI_CXX_BOOL, local_rank + 1,
+             MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
+    cell_stat.at(cell_stat.size() - 1) = left_bound_from_remote;
   } else if (local_rank == 1) {
-    MPI_Recv(&gost_cell, 1, MPI_CXX_BOOL, local_rank, MPI_ANY_TAG, comm,
-             MPI_STATUS_IGNORE);
-    cell_stat.at(0) = gost_cell;
+    bool left_bound_from_remote;
+    bool left_bound = cell_stat.at(0);
+    MPI_Recv(&left_bound_from_remote, 1, MPI_CXX_BOOL, local_rank - 1,
+             MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
+    cell_stat.at(0) = left_bound_from_remote;
+
+    MPI_Send(&left_bound, 1, MPI_CXX_BOOL, local_rank - 1, local_rank - 1,
+             comm);
   }
 }
 
@@ -140,12 +155,27 @@ void init_cell_state(std::vector<bool>& cellular_state,
     cellular_state.push_back(static_cast<bool>(dist(engine)));
   }
 
-  size_t step{num_cells_per_process + NUM_GOST_CELLS + 1};
-
   // Init gost cells
-  for (size_t i{num_cells_per_process + reminder + NUM_GOST_CELLS};
-       i < total_states; i += step) {
-    cellular_state.at(i) = cellular_state.at(i - 1);
+  size_t i{};
+
+  cellular_state.at(0) = cellular_state.at(1);
+
+  for (; i < num_cells_per_process + reminder + 2; ++i) {
+    if (i == num_cells_per_process + reminder + 1) {
+      cellular_state.at(i) = cellular_state.at(i - 1);
+    }
+  }
+  size_t total{};
+
+  for (; i < cellular_state.size(); ++i) {
+    if (total == 0) {
+      cellular_state.at(i) = cellular_state.at(i + 1);
+    } else if (total > num_cells_per_process) {
+      cellular_state.at(i) = cellular_state.at(i - 1);
+      total = 0;
+      continue;
+    }
+    ++total;
   }
 
   if (is_period_condition) {
@@ -270,14 +300,14 @@ int main(int argc, char** argv) {
 
   bool is_period_boundary{argc == 5};
 
+  int rule_num{std::stoi(argv[2])};
+
   if (process_rank == ROOT_RANK) {
     if (is_period_boundary) {
       cout << "Periodically boundary condition enabled" << endl;
     } else {
       cout << "Periodically boundary condition disabled" << endl;
     }
-
-    int rule_num{std::stoi(argv[2])};
 
     if (rule_num < 0 || rule_num > 255) {
       cerr << "Rule num must be byte value: [0; 255]" << endl;
@@ -288,6 +318,13 @@ int main(int argc, char** argv) {
   }
 
   broadcast_rule(rules, ROOT_RANK, process_rank);
+
+#ifdef DEBUG
+  // cout << "Rule: ";
+  // for (size_t i{}; i < rules.size(); ++i) {
+  //   cout << ' ' << i << ' ' << rules[i];
+  // }
+#endif
 
   vector<bool> prev_cellular_state_per_process, cellular_state_per_process;
   vector<bool> all_cellular_state_per_step;
@@ -341,7 +378,6 @@ int main(int argc, char** argv) {
       size_t total{};
 
       for (; i < cellular_state_per_process.size(); ++i) {
-        // cout << i << ' ' << total << ' ';
         if (total == 0) {
           cout << 'x';
         } else if (total > num_cells_per_process) {
@@ -369,7 +405,9 @@ int main(int argc, char** argv) {
   std::ofstream file;
 
   if (process_rank == 0) {
-    file.open("state.txt", std::ostream::app);
+    std::stringstream name;
+    name << "state_" << std::to_string(rule_num) << ".txt";
+    file.open(name.str());
   }
 
   int num_groups{world_size};
@@ -384,19 +422,21 @@ int main(int argc, char** argv) {
   init_comm_and_groups(communicators, groups, world_group, world_size,
                        is_period_boundary);
 
-  prev_cellular_state_per_process = cellular_state_per_process;
-
   for (size_t step{}; step < total_steps; ++step) {
-    sync_states(cellular_state_per_process, communicators[process_rank]);
+    if (is_period_boundary && process_rank == 0) {
+      sync_states(cellular_state_per_process, communicators[world_size - 1],
+                  process_rank);
+    }
+    sync_states(cellular_state_per_process, communicators[process_rank],
+                process_rank);
 
-    if (process_rank + 1 < world_size &&
-        communicators[process_rank + 1] != MPI_COMM_NULL) {
-      sync_states(cellular_state_per_process, communicators[process_rank + 1]);
+    if (process_rank > 0 && communicators[process_rank - 1] != MPI_COMM_NULL) {
+      sync_states(cellular_state_per_process, communicators[process_rank - 1],
+                  process_rank);
     }
 
 #ifdef DEBUG
-    MPI_Barrier(MPI_COMM_WORLD);
-    cout << "State: " << process_rank << endl;
+    cout << "State " << process_rank << ": ";
     for (size_t i{}; i < cellular_state_per_process.size(); ++i) {
       cout << cellular_state_per_process.at(i);
     }
@@ -416,19 +456,25 @@ int main(int argc, char** argv) {
       file << endl;
     }
 
+    prev_cellular_state_per_process = cellular_state_per_process;
+
     update_state(rules, prev_cellular_state_per_process,
                  cellular_state_per_process);
 
 #ifdef DEBUG
     MPI_Barrier(MPI_COMM_WORLD);
     if (process_rank == ROOT_RANK) {
-      cout << "State per step:\n";
+      cout << "State per step: " << step << '\n';
       for (size_t i{}; i < all_cellular_state_per_step.size(); ++i) {
         cout << all_cellular_state_per_step.at(i);
       }
       cout << endl;
     }
 #endif
+  }
+
+  if (process_rank == 0) {
+    file.close();
   }
 
   for (size_t i{}; i < world_size; ++i) {
