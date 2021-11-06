@@ -7,8 +7,6 @@
 #include "mpi.h"
 #include "stdafx.h"
 
-// #define DEBUG
-
 const size_t MAX_WORDS_PER_LINE = 100'000;
 
 using CounterType = std::uint64_t;
@@ -262,10 +260,6 @@ int main(int argc, char** argv) {
 
   file.close();
 
-#ifdef DEBUG
-  cout << "Builded dict " << process_rank << endl;
-#endif
-
   std::vector<int> communition_ranks;
   std::vector<int> new_communications;
 
@@ -279,9 +273,6 @@ int main(int argc, char** argv) {
   while (communition_ranks.size() > 1) {
     int new_local_rank = local_rank / 2;
 
-#ifdef DEBUG
-    cout << "Tets " << new_local_rank << ' ' << process_rank << endl;
-#endif
     int reminder = local_rank % 2;
     int size = 2;
 
@@ -297,11 +288,6 @@ int main(int argc, char** argv) {
       ranks[1] = communition_ranks.at(local_rank + 1);
     }
 
-#ifdef DEBUG
-    cout << "Ranks " << process_rank << ' ' << ranks[0] << ' ' << ranks[1]
-         << endl;
-#endif
-
     if (size != 1) {
       sync_dictionary(word_counter, process_rank, ranks[1], ranks[0]);
     }
@@ -315,16 +301,6 @@ int main(int argc, char** argv) {
       new_communications.push_back(communition_ranks[i]);
     }
 
-#ifdef DEBUG
-    cout << "new comm ";
-    for (const auto& rank : new_communications) {
-      cout << ' ' << rank;
-    }
-
-    cout << endl;
-
-#endif
-
     communition_ranks = new_communications;
     new_communications.clear();
     local_rank = new_local_rank;
@@ -336,10 +312,6 @@ int main(int argc, char** argv) {
     save_top_n(out, word_counter, topN);
     out.close();
   }
-
-#ifdef DEBUG
-  cout << "Exited " << process_rank << endl;
-#endif
 
   MPI_Finalize();
 
