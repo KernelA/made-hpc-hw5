@@ -30,3 +30,10 @@
 *.exe
 *.out
 *.app
+
+build/
+.vscode/
+state.txt
+*.jpg
+!images/evol/*.jpg
+!images/perf/*.jpg
