@@ -1,4 +1,5 @@
 find_package(MPI REQUIRED)
+find_package(ICU REQUIRED COMPONNETS i18n uc io)
 
 set(_include_dir ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -21,6 +22,19 @@ foreach(project ${project_names})
 
 endforeach()
 
+
+
+add_executable("word_counter"
+    ${_headers}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/word_counter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/utils.cpp
+)
+
+target_compile_features("word_counter" PRIVATE cxx_std_17)
+target_include_directories("word_counter" PRIVATE ${_include_dir})
+target_precompile_headers("word_counter" PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/stdafx.h)
+target_link_libraries("word_counter" PRIVATE MPI::MPI_CXX PRIVATE ICU::i18n PRIVATE ICU::uc PRIVATE ICU::io)
+
 SET(test_projects "test_bin2num;test_num2bit")
 
 foreach(test_project ${test_projects})
@@ -34,7 +48,6 @@ foreach(test_project ${test_projects})
     target_compile_features(${test_project} PRIVATE cxx_std_17)
     target_include_directories(${test_project} PRIVATE ${_include_dir})
     target_precompile_headers(${test_project} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/stdafx.h)
-
 endforeach()
 
 
