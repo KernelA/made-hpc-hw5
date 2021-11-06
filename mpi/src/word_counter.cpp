@@ -7,7 +7,7 @@
 #include "mpi.h"
 #include "stdafx.h"
 
-#define DEBUG
+// #define DEBUG
 
 const size_t MAX_WORDS_PER_LINE = 100'000;
 
@@ -139,27 +139,27 @@ void eval_total(std::vector<SizeType>& dict_sizes, const WordMap& map, int rank,
              MPI_UINT64_T, root_rank, MPI_COMM_WORLD);
 }
 
-void sync_dictionary(WordMap& map, int from_rank, int process_rank,
+void sync_dictionary(WordMap& map, int process_rank, int rec_from_rank,
                      int dest_rank) {
   if (process_rank == dest_rank) {
     CounterType total_remote_words{};
-    MPI_Recv(&total_remote_words, 1, MPI_UINT64_T, from_rank, MPI_ANY_TAG,
+    MPI_Recv(&total_remote_words, 1, MPI_UINT64_T, rec_from_rank, MPI_ANY_TAG,
              MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
     CounterType raw_buffer_size{};
     CounterType remote_word_count{};
 
     for (CounterType i{}; i < total_remote_words; ++i) {
-      MPI_Recv(&raw_buffer_size, 1, MPI_UINT64_T, from_rank, MPI_ANY_TAG,
+      MPI_Recv(&raw_buffer_size, 1, MPI_UINT64_T, rec_from_rank, MPI_ANY_TAG,
                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       char buffer[raw_buffer_size];
 
-      MPI_Recv(buffer, raw_buffer_size, MPI_CHAR, from_rank, MPI_ANY_TAG,
+      MPI_Recv(buffer, raw_buffer_size, MPI_CHAR, rec_from_rank, MPI_ANY_TAG,
                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
       std::string remote_word(buffer);
 
-      MPI_Recv(&remote_word_count, 1, MPI_UINT64_T, from_rank, MPI_ANY_TAG,
+      MPI_Recv(&remote_word_count, 1, MPI_UINT64_T, rec_from_rank, MPI_ANY_TAG,
                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
       auto it{map.find(remote_word)};
@@ -173,20 +173,53 @@ void sync_dictionary(WordMap& map, int from_rank, int process_rank,
   } else {
     CounterType total_words{map.size()};
 
-    MPI_Send(&total_words, 1, MPI_UINT64_T, dest_rank, from_rank,
+    MPI_Send(&total_words, 1, MPI_UINT64_T, dest_rank, rec_from_rank,
              MPI_COMM_WORLD);
 
     for (const auto& word_count_pair : map) {
       CounterType buffer_size{word_count_pair.first.size()};
-      MPI_Send(&buffer_size, 1, MPI_UINT64_T, dest_rank, from_rank,
+      MPI_Send(&buffer_size, 1, MPI_UINT64_T, dest_rank, rec_from_rank,
                MPI_COMM_WORLD);
 
       MPI_Send(word_count_pair.first.c_str(), buffer_size, MPI_CHAR, dest_rank,
-               from_rank, MPI_COMM_WORLD);
+               rec_from_rank, MPI_COMM_WORLD);
 
-      MPI_Send(&word_count_pair.second, 1, MPI_UINT64_T, dest_rank, from_rank,
-               MPI_COMM_WORLD);
+      MPI_Send(&word_count_pair.second, 1, MPI_UINT64_T, dest_rank,
+               rec_from_rank, MPI_COMM_WORLD);
     }
+  }
+}
+
+void save_top_n(std::ofstream& out_stream, const WordMap& word_counter,
+                int top_n) {
+  using PriorityItem = std::pair<CounterType, std::string>;
+
+  std::priority_queue<PriorityItem, std::vector<PriorityItem>,
+                      std::greater<PriorityItem>>
+      top_n_words;
+
+  for (const auto& word_count_pair : word_counter) {
+    if (top_n_words.size() < top_n) {
+      top_n_words.push(
+          std::make_pair(word_count_pair.second, word_count_pair.first));
+    } else {
+      if (top_n_words.top().first < word_count_pair.second) {
+        top_n_words.pop();
+        top_n_words.push(
+            std::make_pair(word_count_pair.second, word_count_pair.first));
+      }
+    }
+  }
+
+  std::vector<PriorityItem> order_by_count;
+
+  while (!top_n_words.empty()) {
+    order_by_count.push_back(top_n_words.top());
+    top_n_words.pop();
+  }
+
+  for (auto it{order_by_count.crbegin()}; it != order_by_count.crend(); ++it) {
+    out_stream << it->second << ' ' << it->first << std::endl;
   }
 }
 
@@ -201,12 +234,15 @@ int main(int argc, char** argv) {
 
   MPI_Init(&argc, &argv);
 
-  if (argc != 2) {
-    cerr << "Specify basename to the file. Full name is "
+  if (argc != 3) {
+    cerr << "Specify basename to the file and top n words. Full name is "
             "basename<process_rank>.txt\nprocess_rank starts from zero"
          << endl;
+    cout << "Example: basename 100" << endl;
     MPI_Abort(MPI_COMM_WORLD, MPI_ERR_ARG);
   }
+
+  int topN{std::stoi(argv[2])};
 
   int process_rank{}, world_size{};
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
@@ -227,29 +263,83 @@ int main(int argc, char** argv) {
   file.close();
 
 #ifdef DEBUG
-  cout << "Build dict " << process_rank << endl;
+  cout << "Builded dict " << process_rank << endl;
 #endif
 
-   int dest_rank = ROOT_RANK;
+  std::vector<int> communition_ranks;
+  std::vector<int> new_communications;
 
-  if (process_rank == dest_rank) {
-    for (int i{}; i < world_size; ++i) {
-      if (i == dest_rank) {
-        continue;
-      }
+  for (int i{}; i < world_size; ++i) {
+    communition_ranks.push_back(i);
+  }
 
-      sync_dictionary(word_counter, i, process_rank, dest_rank);
-    }
-  } else {
-    sync_dictionary(word_counter, process_rank, process_rank, dest_rank);
-    word_counter.clear();
+  int local_rank = process_rank;
+  int ranks[2] = {};
+
+  while (communition_ranks.size() > 1) {
+    int new_local_rank = local_rank / 2;
+
 #ifdef DEBUG
-    cout << "Sync own dict " << process_rank << endl;
+    cout << "Tets " << new_local_rank << ' ' << process_rank << endl;
 #endif
+    int reminder = local_rank % 2;
+    int size = 2;
+
+    if (local_rank == communition_ranks.size() - 1 &&
+        communition_ranks.size() % 2 == 1) {
+      size = 1;
+      ranks[0] = communition_ranks.at(new_local_rank);
+    } else if (reminder == 1) {
+      ranks[0] = communition_ranks.at(local_rank - 1);
+      ranks[1] = communition_ranks.at(local_rank);
+    } else {
+      ranks[0] = communition_ranks.at(local_rank);
+      ranks[1] = communition_ranks.at(local_rank + 1);
+    }
+
+#ifdef DEBUG
+    cout << "Ranks " << process_rank << ' ' << ranks[0] << ' ' << ranks[1]
+         << endl;
+#endif
+
+    if (size != 1) {
+      sync_dictionary(word_counter, process_rank, ranks[1], ranks[0]);
+    }
+
+    if (reminder == 1) {
+      word_counter.clear();
+      break;
+    }
+
+    for (size_t i{}; i < communition_ranks.size(); i += 2) {
+      new_communications.push_back(communition_ranks[i]);
+    }
+
+#ifdef DEBUG
+    cout << "new comm ";
+    for (const auto& rank : new_communications) {
+      cout << ' ' << rank;
+    }
+
+    cout << endl;
+
+#endif
+
+    communition_ranks = new_communications;
+    new_communications.clear();
+    local_rank = new_local_rank;
   }
 
-  if (process_rank == ROOT_RANK) {
+  if (!word_counter.empty()) {
+    std::ofstream out("top_n.txt");
+
+    save_top_n(out, word_counter, topN);
+    out.close();
   }
+
+#ifdef DEBUG
+  cout << "Exited " << process_rank << endl;
+#endif
 
   MPI_Finalize();
 
